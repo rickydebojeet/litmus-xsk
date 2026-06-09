@@ -1,0 +1,59 @@
+C spsc-rb+p0acqrelp1acqrelnew+empty
+
+// Simple one entry ring with MPSC-capable Consumer:
+// prod  cons_head  cons        allowed action         prod  cons_head  cons
+//   0        0       0   =>       produce        =>     1        0       0
+//   0        0       1   =>    commit consume    =>     0        0       0
+//   0        1       0   =>      impossible      =>     -        -       -
+//   0        1       1   =>    stage consume     =>     0        0       1
+//   1        0       0   =>    stage consume     =>     1        1       0
+//   1        0       1   =>      impossible      =>     -        -       -
+//   1        1       0   =>    commit consume    =>     1        1       1
+//   1        1       1   =>       produce        =>     0        1       1
+
+// The old acqrel algorithm (producer) in userspace and
+// new acqrel in kernel (consumer). 
+// We start at prod==0, cons_head==0, cons==0, data0==0.
+// Producer writes 1 to data0, consumer should read 1.
+// Can we enter state prod==1, cons==1, but consumer observed
+// the incorrect initial value of 0?
+
+{}
+
+P0(int *prod, int *cons, int *data0)
+{
+	int p;
+
+	p = READ_ONCE(*prod);
+	if (READ_ONCE(*cons) == p) {
+		WRITE_ONCE(*data0, 1);
+		smp_store_release(prod, p ^ 1);
+	}
+}
+
+P1(int *prod, int *cons_head, int *cons, int *data0)
+{
+	int capacity = 1;
+	int r_cmp;
+	int ch;
+	int p;
+	int d = -1;
+
+	ch = READ_ONCE(*cons_head);
+
+	p = READ_ONCE(*prod);
+	if (p > ch) {
+		r_cmp = cmpxchg(cons_head, ch, ch ^ 1);
+		if (r_cmp == ch) {
+			d = READ_ONCE(*data0);
+		
+			if (READ_ONCE(*cons) == ch) {
+				smp_store_release(cons, ch ^ 1);
+			}
+		}
+	}
+}
+
+exists( 
+    (1:d=0 /\ prod=1 /\ cons_head=1 /\ cons=1)
+);
